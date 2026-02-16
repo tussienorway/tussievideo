@@ -1,6 +1,8 @@
 {
   "name": "TussieStudio",
   "description": "Profesjonell videogenerering drevet av Veo 3.1. Skap og forleng scener med perfekt kontinuitet.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "camera"
+  ],
   "prompt": ""
 }

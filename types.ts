@@ -45,6 +45,15 @@ export interface VideoFile {
   base64: string;
 }
 
+export interface SavedVideo {
+  id: string;
+  url: string;
+  blob: Blob;
+  videoObject: Video;
+  timestamp: number;
+  params: GenerateVideoParams;
+}
+
 export interface GenerateVideoParams {
   prompt: string;
   model: VeoModel;

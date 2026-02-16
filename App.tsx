@@ -10,6 +10,7 @@ import {CurvedArrowDownIcon, ChevronDownIcon} from './components/icons';
 import LoadingIndicator from './components/LoadingIndicator';
 import PromptForm from './components/PromptForm';
 import VideoResult from './components/VideoResult';
+import VideoLibrary from './components/VideoLibrary';
 import {generateVideo} from './services/geminiService';
 import {
   AppState,
@@ -19,6 +20,8 @@ import {
   Resolution,
   VeoModel,
   VideoFile,
+  SavedVideo,
+  ImageFile,
 } from './types';
 
 const App: React.FC = () => {
@@ -26,11 +29,10 @@ const App: React.FC = () => {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<VeoModel>(VeoModel.VEO_QWEN_HYBRID);
-  const [lastConfig, setLastConfig] = useState<GenerateVideoParams | null>(
-    null,
-  );
+  const [lastConfig, setLastConfig] = useState<GenerateVideoParams | null>(null);
   const [lastVideoObject, setLastVideoObject] = useState<Video | null>(null);
   const [lastVideoBlob, setLastVideoBlob] = useState<Blob | null>(null);
+  const [library, setLibrary] = useState<SavedVideo[]>([]);
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [isApiKeyValidated, setIsApiKeyValidated] = useState(false);
 
@@ -39,21 +41,21 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkApiKeyStatus = async () => {
-      // Sjekk om vi er i AI Studio miljøet (hvor nøkkelvalg er påkrevd for Veo)
       if (window.aistudio) {
         try {
           const hasKey = await window.aistudio.hasSelectedApiKey();
           if (!hasKey) {
+            setIsApiKeyValidated(false);
             setShowApiKeyDialog(true);
           } else {
             setIsApiKeyValidated(true);
           }
         } catch (error) {
-          console.error("Kunne ikke verifisere nøkkel via AI Studio:", error);
+          setIsApiKeyValidated(false);
           setShowApiKeyDialog(true);
         }
       } else {
-        // I en APK eller på eget domene antar vi at API_KEY er satt i miljøet
+        // Fallback for lokal utvikling uten AI Studio wrapper
         setIsApiKeyValidated(true);
       }
     };
@@ -61,13 +63,15 @@ const App: React.FC = () => {
   }, []);
 
   const handleGenerate = useCallback(async (params: GenerateVideoParams) => {
-    // Tving VEO (Pro) ved forlengelse for best resultat
+    if (!params.prompt.trim() && params.mode !== GenerationMode.FRAMES_TO_VIDEO) {
+      params.prompt = "A high quality cinematic scene continuation.";
+    }
+
     const finalParams = {
       ...params,
       model: params.mode === GenerationMode.EXTEND_VIDEO ? VeoModel.VEO : selectedModel
     };
 
-    // Sjekk på nytt hvis vi er i AI Studio
     if (window.aistudio) {
       try {
         if (!(await window.aistudio.hasSelectedApiKey())) {
@@ -87,53 +91,111 @@ const App: React.FC = () => {
 
     try {
       const {objectUrl, blob, video} = await generateVideo(finalParams);
+      
+      const newSavedVideo: SavedVideo = {
+        id: crypto.randomUUID(),
+        url: objectUrl,
+        blob: blob,
+        videoObject: video,
+        timestamp: Date.now(),
+        params: finalParams
+      };
+
       setVideoUrl(objectUrl);
       setLastVideoBlob(blob);
       setLastVideoObject(video);
+      setLibrary(prev => [newSavedVideo, ...prev]);
       setAppState(AppState.SUCCESS);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Video generation failed:', error);
-      const msg = error instanceof Error ? error.message : 'En ukjent feil oppstod.';
+      let msg = 'En uventet feil oppstod. Sjekk tilkoblingen din.';
+      
+      const errorStr = error.toString() || "";
+      if (errorStr.includes('400')) {
+        msg = "Ugyldig forespørsel (400). Dette skyldes ofte innholdsfiltere eller at fakturering ikke er aktiv på prosjektet.";
+      } else if (errorStr.includes('403') || errorStr.includes('401') || errorStr.includes('not found')) {
+        msg = "Nøkkel-feil (403). Prosjektet mangler tilgang til Veo-modellene. Sjekk fakturering på Google Cloud.";
+        setIsApiKeyValidated(false);
+        setShowApiKeyDialog(true);
+      }
+      
       setErrorMessage(msg);
       setAppState(AppState.ERROR);
-      
-      // Hvis feilen er relatert til tilgang/betaling, vis nøkkel-dialogen igjen
-      if (msg.includes('403') || msg.includes('401') || msg.includes('billing') || msg.includes('not found')) {
-        setShowApiKeyDialog(true);
-        setIsApiKeyValidated(false);
-      }
     }
   }, [selectedModel]);
 
-  const handleRetry = useCallback(() => {
-    if (lastConfig) handleGenerate(lastConfig);
-  }, [lastConfig, handleGenerate]);
-
-  const handleApiKeyDialogContinue = async () => {
-    setShowApiKeyDialog(false);
-    if (window.aistudio) {
-      await window.aistudio.openSelectKey();
-      // Som per retningslinjer: anta suksess etter openSelectKey for å unngå race conditions
-      setIsApiKeyValidated(true);
-    } else {
-      setIsApiKeyValidated(true);
-    }
+  const handleContinueFromVideo = useCallback(async (savedVideo: SavedVideo) => {
+    setAppState(AppState.LOADING);
     
-    // Hvis vi kom fra en feil, prøv på nytt
-    if (appState === AppState.ERROR && lastConfig) {
-      handleRetry();
-    }
-  };
+    const extractLastFrame = async (url: string): Promise<ImageFile> => {
+      return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        video.src = url;
+        video.crossOrigin = "anonymous";
+        video.muted = true;
+        video.playsInline = true;
+        
+        const timeout = setTimeout(() => reject(new Error("Timeout under bildeuttrekk")), 15000);
 
-  const handleNewVideo = useCallback(() => {
+        video.onloadedmetadata = () => {
+          video.currentTime = Math.max(0, video.duration - 0.1);
+        };
+
+        video.onseeked = () => {
+          clearTimeout(timeout);
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0);
+            const dataUrl = canvas.toDataURL('image/png');
+            const base64 = dataUrl.split(',')[1];
+            fetch(dataUrl).then(res => res.blob()).then(blob => {
+              const file = new File([blob], "last_frame.png", { type: "image/png" });
+              resolve({ file, base64 });
+            }).catch(reject);
+          } else {
+            reject(new Error("Canvas feilet"));
+          }
+        };
+        video.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error("Video kunne ikke lastes i WebView"));
+        };
+      });
+    };
+
+    try {
+      const lastFrame = await extractLastFrame(savedVideo.url);
+      setInitialFormValues({
+        ...savedVideo.params,
+        mode: GenerationMode.FRAMES_TO_VIDEO,
+        prompt: '',
+        startFrame: lastFrame,
+        endFrame: null,
+        isLooping: false,
+        inputVideo: null,
+        inputVideoObject: null
+      });
+      setAppState(AppState.IDLE);
+      setVideoUrl(null);
+    } catch (e) {
+      setErrorMessage("Automatisk kobling feilet i denne nettleseren. Prøv forlengelse manuelt.");
+      setAppState(AppState.ERROR);
+    }
+  }, []);
+
+  const handleRetry = () => lastConfig && handleGenerate(lastConfig);
+  
+  const handleNewVideo = () => {
     setAppState(AppState.IDLE);
     setVideoUrl(null);
-    setErrorMessage(null);
-    setLastConfig(null);
-    setLastVideoObject(null);
-    setLastVideoBlob(null);
     setInitialFormValues(null);
-  }, []);
+    setLastVideoBlob(null);
+    setLastVideoObject(null);
+    setErrorMessage(null);
+  };
 
   const handleExtend = useCallback(async () => {
     if (lastConfig && lastVideoBlob && lastVideoObject) {
@@ -157,17 +219,28 @@ const App: React.FC = () => {
 
       setAppState(AppState.IDLE);
       setVideoUrl(null);
-      setErrorMessage(null);
     }
   }, [lastConfig, lastVideoBlob, lastVideoObject]);
 
-  const canExtend = lastConfig?.resolution === Resolution.P720;
+  const handleApiKeyDialogContinue = async () => {
+    setShowApiKeyDialog(false);
+    if (window.aistudio) {
+      try {
+        await window.aistudio.openSelectKey();
+        setIsApiKeyValidated(true);
+      } catch (e) {
+        console.error("Nøkkel-valg avbrutt", e);
+      }
+    } else {
+      setIsApiKeyValidated(true);
+    }
+  };
 
   const getModelDisplayName = (m: VeoModel) => {
     switch (m) {
       case VeoModel.VEO: return 'VEO 3.1 PRO';
       case VeoModel.VEO_FAST: return 'VEO 3.1 FAST';
-      case VeoModel.VEO_QWEN_HYBRID: return 'QWEN-STYLE HYBRID';
+      case VeoModel.VEO_QWEN_HYBRID: return 'QWEN HYBRID';
     }
   };
 
@@ -175,73 +248,79 @@ const App: React.FC = () => {
     <div className="h-screen bg-black text-gray-200 flex flex-col font-sans overflow-hidden">
       {showApiKeyDialog && <ApiKeyDialog onContinue={handleApiKeyDialogContinue} />}
 
-      {/* Modellvelger i hjørnet */}
+      {/* Header med Motor og Nøkkelstatus */}
       <div className="absolute top-6 right-8 flex flex-col items-end gap-2 z-20">
         <div className="relative group">
-          <div className="border border-indigo-400/50 bg-black/60 backdrop-blur-md px-4 py-2 text-indigo-400 text-xs font-mono flex items-center gap-3 cursor-pointer hover:bg-indigo-400/10 transition-all rounded-sm shadow-lg shadow-indigo-500/10">
-            <span className="opacity-60 uppercase tracking-widest">Aura Engine:</span>
-            <span className="font-bold">{getModelDisplayName(selectedModel)}</span>
-            <ChevronDownIcon className="w-3 h-3" />
+          <div className="flex items-center gap-2 mb-1 pr-2">
+            <span className="text-[8px] font-bold text-white/30 tracking-widest uppercase">API STATUS:</span>
+            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${isApiKeyValidated ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30 animate-pulse'}`}>
+              <div className={`w-1 h-1 rounded-full ${isApiKeyValidated ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+              <span className={`text-[7px] font-black tracking-tighter ${isApiKeyValidated ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {isApiKeyValidated ? 'AKTIV' : 'KREVER NØKKEL'}
+              </span>
+            </div>
           </div>
-          <div className="absolute top-full right-0 mt-2 w-64 bg-[#121212] border border-indigo-400/20 shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all rounded-md overflow-hidden z-30">
+          
+          <div className="border border-white/5 bg-black/80 backdrop-blur-2xl px-5 py-2.5 text-indigo-400 text-[10px] font-black tracking-widest flex items-center gap-4 cursor-pointer hover:bg-white/5 transition-all rounded-2xl shadow-2xl">
+            <span className="opacity-40 uppercase">MOTOR:</span>
+            <span>{getModelDisplayName(selectedModel)}</span>
+            <ChevronDownIcon className="w-4 h-4 opacity-50" />
+          </div>
+          
+          <div className="absolute top-full right-0 mt-3 w-64 bg-gray-950 border border-white/10 shadow-[0_30px_60px_rgba(0,0,0,0.8)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all rounded-2xl overflow-hidden z-30 backdrop-blur-3xl">
             <button 
               onClick={() => setSelectedModel(VeoModel.VEO_QWEN_HYBRID)}
-              className={`w-full text-left px-4 py-3 text-xs font-mono hover:bg-indigo-400/10 transition-colors ${selectedModel === VeoModel.VEO_QWEN_HYBRID ? 'text-white bg-indigo-400/5 border-l-2 border-indigo-400' : 'text-gray-400'}`}>
-              <div className="font-bold flex items-center gap-2">
-                QWEN-STYLE HYBRID 
-                <span className="px-1 bg-indigo-500 text-[8px] rounded-sm text-white">DUAL</span>
-              </div>
-              <div className="text-[9px] opacity-50 mt-1">Semantic expansion + Veo 3.1</div>
+              className={`w-full text-left px-5 py-4 text-[10px] font-bold hover:bg-white/5 transition-colors border-b border-white/5 ${selectedModel === VeoModel.VEO_QWEN_HYBRID ? 'text-indigo-400 bg-indigo-400/5' : 'text-gray-500'}`}>
+              QWEN HYBRID <span className="text-[7px] bg-indigo-500 text-white px-1 ml-1 rounded">SMART</span>
+              <div className="text-[9px] font-normal opacity-40 mt-1">Beste forståelse + Kinematisk Veo</div>
             </button>
             <button 
               onClick={() => setSelectedModel(VeoModel.VEO)}
-              className={`w-full text-left px-4 py-3 text-xs font-mono hover:bg-indigo-400/10 transition-colors ${selectedModel === VeoModel.VEO ? 'text-white bg-indigo-400/5 border-l-2 border-indigo-400' : 'text-gray-400'}`}>
-              <div className="font-bold">VEO 3.1 PRO</div>
-              <div className="text-[9px] opacity-50 mt-1">Direct cinematic control</div>
+              className={`w-full text-left px-5 py-4 text-[10px] font-bold hover:bg-white/5 transition-colors border-b border-white/5 ${selectedModel === VeoModel.VEO ? 'text-indigo-400 bg-indigo-400/5' : 'text-gray-500'}`}>
+              VEO 3.1 PRO
+              <div className="text-[9px] font-normal opacity-40 mt-1">Maksimal bildekvalitet</div>
             </button>
             <button 
               onClick={() => setSelectedModel(VeoModel.VEO_FAST)}
-              className={`w-full text-left px-4 py-3 text-xs font-mono hover:bg-indigo-400/10 transition-colors ${selectedModel === VeoModel.VEO_FAST ? 'text-white bg-indigo-400/5 border-l-2 border-indigo-400' : 'text-gray-400'}`}>
-              <div className="font-bold">VEO 3.1 FAST</div>
-              <div className="text-[9px] opacity-50 mt-1">Rapid iterative drafting</div>
+              className={`w-full text-left px-5 py-4 text-[10px] font-bold hover:bg-white/5 transition-colors ${selectedModel === VeoModel.VEO_FAST ? 'text-indigo-400 bg-indigo-400/5' : 'text-gray-500'}`}>
+              VEO 3.1 FAST
+              <div className="text-[9px] font-normal opacity-40 mt-1">Rask generering</div>
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className={`w-1.5 h-1.5 rounded-full ${isApiKeyValidated ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></div>
-          <span className="text-[10px] font-mono text-gray-500 uppercase tracking-tighter">
-            API Status: {isApiKeyValidated ? 'Ready' : 'Pending Selection'}
-          </span>
-        </div>
       </div>
 
-      <header className="pt-12 pb-4 flex flex-col items-center justify-center px-8 relative z-10">
-        <div className="w-64 h-12 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 mb-6 shadow-lg shadow-indigo-500/20 rounded-sm opacity-90"></div>
-        <h1 className="text-4xl sm:text-5xl font-semibold tracking-tighter text-center bg-gradient-to-r from-indigo-200 via-white to-pink-200 bg-clip-text text-transparent">
+      <header className="pt-16 pb-6 flex flex-col items-center justify-center px-8 relative z-10">
+        <h1 className="text-5xl sm:text-6xl font-black tracking-tighter text-center bg-gradient-to-b from-white to-white/40 bg-clip-text text-transparent italic">
           TussieStudio
         </h1>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="text-[10px] text-gray-600 tracking-[0.3em] uppercase">Cinematic Intelligence</span>
-          <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
-          <span className="text-[10px] text-indigo-400/80 tracking-widest font-mono">austenaa.eu</span>
+        <div className="mt-4">
+          <span className="text-[9px] text-indigo-400 font-black tracking-[0.5em] uppercase opacity-80">Cinematic Visionary</span>
         </div>
       </header>
       
-      <main className="w-full max-w-4xl mx-auto flex-grow flex flex-col p-4 relative">
+      <main className="w-full max-w-5xl mx-auto flex-grow flex flex-col p-6 relative overflow-y-auto no-scrollbar">
         {appState === AppState.IDLE ? (
           <>
-            <div className="flex-grow flex items-center justify-center">
-              <div className="relative text-center">
-                <h2 className="text-3xl text-gray-700 font-light italic">Start your vision below</h2>
-                <CurvedArrowDownIcon className="absolute top-full left-1/2 -translate-x-1/2 mt-6 w-16 h-16 text-gray-800 opacity-40" />
+            <div className="flex-grow flex flex-col items-center justify-center py-12">
+              <div className="relative text-center mb-16">
+                <h2 className="text-4xl text-white/20 font-light tracking-tight">Visualize your imagination</h2>
+                <CurvedArrowDownIcon className="absolute top-full left-1/2 -translate-x-1/2 mt-8 w-12 h-12 text-indigo-500/30 animate-bounce" />
               </div>
+              
+              <VideoLibrary 
+                videos={library} 
+                onSelect={(v) => { setVideoUrl(v.url); setAppState(AppState.SUCCESS); setLastConfig(v.params); setLastVideoObject(v.videoObject); setLastVideoBlob(v.blob); }}
+                onRemove={(id) => setLibrary(prev => prev.filter(v => v.id !== id))}
+                onContinue={handleContinueFromVideo}
+              />
             </div>
-            <div className="pb-8">
+            <div className="pb-12 shrink-0">
               <PromptForm onGenerate={handleGenerate} initialValues={initialFormValues} />
             </div>
           </>
         ) : (
-          <div className="flex-grow flex items-center justify-center">
+          <div className="flex-grow flex items-center justify-center py-8">
             {appState === AppState.LOADING && <LoadingIndicator />}
             {appState === AppState.SUCCESS && videoUrl && (
               <VideoResult
@@ -249,20 +328,23 @@ const App: React.FC = () => {
                 onRetry={handleRetry}
                 onNewVideo={handleNewVideo}
                 onExtend={handleExtend}
-                canExtend={canExtend}
+                onContinue={() => {
+                  if (library.length > 0) handleContinueFromVideo(library[0]);
+                }}
+                canExtend={lastConfig?.resolution === Resolution.P720}
                 aspectRatio={lastConfig?.aspectRatio || AspectRatio.LANDSCAPE}
               />
             )}
             {appState === AppState.ERROR && errorMessage && (
-              <div className="text-center max-w-md bg-red-950/20 border border-red-900/50 p-10 rounded-2xl backdrop-blur-sm">
-                <div className="w-12 h-12 bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <span className="text-red-500 text-2xl">!</span>
+              <div className="text-center max-w-lg bg-red-950/10 border border-red-500/20 p-12 rounded-[2rem] backdrop-blur-3xl shadow-2xl">
+                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-red-500/20">
+                  <span className="text-red-500 text-3xl font-black">!</span>
                 </div>
-                <h2 className="text-xl font-bold text-red-400 mb-3">System Error</h2>
-                <p className="text-red-300/70 text-sm leading-relaxed mb-8">{errorMessage}</p>
-                <div className="flex flex-col gap-3">
-                  <button onClick={handleNewVideo} className="w-full py-3 bg-red-900/40 hover:bg-red-900/60 text-red-200 rounded-lg transition-all font-medium">Reset Studio</button>
-                  <button onClick={handleRetry} className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-all">Try Last Attempt Again</button>
+                <h2 className="text-2xl font-black text-white mb-4 uppercase tracking-tight">Systemfeil</h2>
+                <p className="text-red-200/50 text-xs leading-relaxed mb-10 font-mono">{errorMessage}</p>
+                <div className="flex flex-col gap-4">
+                  <button onClick={handleNewVideo} className="w-full py-4 bg-white text-black font-black uppercase tracking-widest rounded-2xl hover:bg-gray-200 transition-all">Gå tilbake</button>
+                  <button onClick={handleRetry} className="w-full py-4 bg-transparent text-white/50 hover:text-white transition-all text-[10px] uppercase font-bold tracking-widest">Prøv på nytt</button>
                 </div>
               </div>
             )}
@@ -270,9 +352,9 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="py-4 text-center border-t border-gray-900/50">
-        <p className="text-[9px] text-gray-700 uppercase tracking-[0.4em]">
-          Published at video.austenaa.eu & APK.austenå.no
+      <footer className="py-6 text-center border-t border-white/5 bg-black/40 backdrop-blur-md">
+        <p className="text-[8px] text-white/20 font-black uppercase tracking-[0.8em]">
+          Video.Austenaa.eu — Cinematic Visionary
         </p>
       </footer>
     </div>
