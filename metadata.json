@@ -1,6 +1,6 @@
 {
-  "name": "TussieStudio",
-  "description": "Profesjonell videogenerering drevet av Veo 3.1. Skap og forleng scener med perfekt kontinuitet.",
+  "name": "Austenå Animation Studio",
+  "description": "Lag lange animasjonsfilmer gratis ved å sy sammen AI-genererte frames (Gemini 2.5 Flash).",
   "requestFramePermissions": [
     "camera"
   ],

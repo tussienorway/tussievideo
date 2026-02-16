@@ -3,98 +3,118 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Video } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { GenerateParams, MediaType } from '../types';
 
-export const generateMedia = async (params: GenerateParams): Promise<{blob: Blob, mediaType: MediaType, videoObject?: Video}> => {
-  if (window.aistudio && !(await window.aistudio.hasSelectedApiKey())) {
-    await window.aistudio.openSelectKey();
+/**
+ * Forbedrer prompten ved hjelp av Gemini 2.5 Flash (rask og gratis).
+ */
+const enhancePrompt = async (userPrompt: string, isExtension: boolean): Promise<string> => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return userPrompt;
+  
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `You are a cinematic director. Rewrite this prompt to be a highly detailed visual description for an image generation AI.
+      Focus on lighting, composition, color grading (e.g. teal and orange, noir), and texture.
+      ${isExtension ? 'The image is the next shot in a sequence, maintain the same style.' : ''}
+      User Prompt: "${userPrompt}"
+      Output ONLY the enhanced English prompt.`,
+    });
+    return response.text || userPrompt;
+  } catch {
+    return userPrompt;
+  }
+};
+
+export const generateMedia = async (params: GenerateParams): Promise<{blob: Blob, mediaType: MediaType, videoObject?: any}> => {
+  // Sjekk om nøkkel finnes (vi bryr oss ikke lenger om Tier 1)
+  if (typeof window !== 'undefined' && window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+    if (!(await window.aistudio.hasSelectedApiKey())) {
+      await window.aistudio.openSelectKey();
+    }
   }
 
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("BILLETING_REQUIRED: API-nøkkel mangler.");
+    throw new Error("API_KEY_MISSING: API-nøkkel mangler.");
   }
   
   const ai = new GoogleGenAI({ apiKey });
-  const { prompt, image, videoObject, isExtension } = params;
+  const { prompt, image, isExtension } = params;
 
   try {
-    // For ekte extension må vi bruke 'veo-3.1-generate-preview' (ikke fast) ifølge dokumentasjonen
-    const modelName = isExtension ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview';
+    // 1. Ekspander prompten
+    const cinematicPrompt = await enhancePrompt(prompt || (isExtension ? "Next scene in sequence" : "Cinematic shot"), !!isExtension);
     
-    const payload: any = {
-      model: modelName,
-      prompt: prompt || (isExtension ? "Continue the action naturally." : "Cinematic scene."),
-      config: { 
-        numberOfVideos: 1, 
-        resolution: '720p', 
-        aspectRatio: '16:9' 
-      }
+    // 2. Klargjør innhold for Gemini 2.5 Flash Image
+    // Dette er "Free Tier" vennlig.
+    const contents: any = {
+      parts: []
     };
 
-    // Ekte extension: Bruk forrige video som referanse
-    if (isExtension && videoObject) {
-      payload.video = videoObject;
-    } 
-    // Image-to-video eller bilde-basert continuity
-    else if (image) {
-      payload.image = {
-        imageBytes: image,
-        mimeType: 'image/png'
-      };
+    // Hvis vi har et input-bilde (fra forrige scene), legger vi det til for stil-konsistens
+    if (image) {
+      contents.parts.push({
+        inlineData: {
+          mimeType: 'image/png',
+          data: image
+        }
+      });
+      // Legg til instruksjon om å bruke bildet
+      contents.parts.push({
+        text: `Create a new image that logically follows this previous scene. Style match: 100%. Prompt: ${cinematicPrompt}`
+      });
+    } else {
+      contents.parts.push({
+        text: cinematicPrompt
+      });
     }
 
-    let operation = await ai.models.generateVideos(payload);
+    // 3. Generer Bilde (Storyboard frame)
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: contents,
+      config: {
+        imageConfig: {
+          aspectRatio: '16:9',
+          numberOfImages: 1
+        }
+      }
+    });
 
-    while (!operation.done) {
-      await new Promise(r => setTimeout(r, 8000));
-      operation = await ai.operations.getVideosOperation({ operation });
+    // 4. Hent ut bildet fra responsen
+    const part = response.candidates?.[0]?.content?.parts.find((p: any) => p.inlineData);
+    
+    if (!part || !part.inlineData) {
+      throw new Error("Kunne ikke generere bilde. Modellen returnerte ingen data.");
     }
 
-    const vid = operation.response?.generatedVideos?.[0]?.video;
-    if (!vid?.uri) throw new Error("Generering fullført, men fant ingen video-data.");
-
-    const res = await fetch(`${vid.uri}&key=${apiKey}`);
-    if (!res.ok) throw new Error("Kunne ikke laste ned videofilen.");
-    const blob = await res.blob();
+    // Konverter Base64 til Blob
+    const base64Data = part.inlineData.data;
+    const byteCharacters = atob(base64Data);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: 'image/png' });
 
     return { 
       blob, 
-      mediaType: 'VIDEO',
-      videoObject: vid // Returnerer objektet slik at neste klipp kan bruke det
+      mediaType: 'IMAGE', // Vi returnerer nå alltid bilder i gratis-versjonen
+      videoObject: undefined 
     };
 
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     
-    if (errorMsg.includes('Requested entity was not found.')) {
-      if (window.aistudio) window.aistudio.openSelectKey();
-      throw new Error("PROSJEKT_FEIL: API-nøkkelen er ugyldig. Velg på nytt.");
+    if (errorMsg.includes('Requested entity was not found.') && window.aistudio) {
+      window.aistudio.openSelectKey();
     }
-
-    if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("BILLETING_REQUIRED: Denne funksjonen krever betalt Tier 1 API-tilgang.");
-    }
-
-    // Fallback til bilde hvis alt annet feiler (kun for start-scener)
-    if (!isExtension) {
-      try {
-        const imgRes = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: { parts: [{ text: `Cinematic high-quality movie still: ${prompt}` }] },
-          config: { imageConfig: { aspectRatio: '16:9' } }
-        });
-        const part = imgRes.candidates?.[0]?.content?.parts.find((p: any) => p.inlineData);
-        if (part) {
-          const binaryString = atob(part.inlineData.data);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-          return { blob: new Blob([bytes], { type: 'image/png' }), mediaType: 'IMAGE' };
-        }
-      } catch (f) {}
-    }
-
-    throw error;
+    
+    throw new Error(`Generering feilet: ${errorMsg}`);
   }
 };
