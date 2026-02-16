@@ -1,0 +1,8 @@
+{
+  "name": "TussieStudio",
+  "description": "Profesjonell videogenerering med streng visuell kontinuitet og AI-drevet bilde-til-video transformasjon.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
