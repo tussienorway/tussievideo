@@ -15,7 +15,7 @@ export enum AppState {
 export enum VeoModel {
   VEO_FAST = 'veo-3.1-fast-generate-preview',
   VEO = 'veo-3.1-generate-preview',
-  COGVIDEO = 'cogvideox-5b-open',
+  VEO_QWEN_HYBRID = 'veo-qwen-hybrid',
 }
 
 export enum AspectRatio {
@@ -29,10 +29,10 @@ export enum Resolution {
 }
 
 export enum GenerationMode {
-  TEXT_TO_VIDEO = 'Tekst til Video',
-  FRAMES_TO_VIDEO = 'Bilde til Video',
-  REFERENCES_TO_VIDEO = 'Referansebilder',
-  EXTEND_VIDEO = 'Forlengelse',
+  TEXT_TO_VIDEO = 'Text to Video',
+  FRAMES_TO_VIDEO = 'Frames to Video',
+  REFERENCES_TO_VIDEO = 'References to Video',
+  EXTEND_VIDEO = 'Extend Video',
 }
 
 export interface ImageFile {
@@ -43,15 +43,6 @@ export interface ImageFile {
 export interface VideoFile {
   file: File;
   base64: string;
-}
-
-export interface VideoHistoryItem {
-  id: string;
-  objectUrl: string;
-  blob: Blob;
-  videoObject: Video;
-  params: GenerateVideoParams;
-  timestamp: number;
 }
 
 export interface GenerateVideoParams {

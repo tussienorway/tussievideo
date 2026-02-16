@@ -12,235 +12,619 @@ import {
   ImageFile,
   Resolution,
   VeoModel,
+  VideoFile,
 } from '../types';
 import {
+  ArrowRightIcon,
   ChevronDownIcon,
   FilmIcon,
   FramesModeIcon,
   PlusIcon,
+  RectangleStackIcon,
   ReferencesModeIcon,
-  TextModeIcon,
-  XMarkIcon,
-  CameraIcon,
+  SlidersHorizontalIcon,
   SparklesIcon,
+  TextModeIcon,
   TvIcon,
+  XMarkIcon,
 } from './icons';
+
+const aspectRatioDisplayNames: Record<AspectRatio, string> = {
+  [AspectRatio.LANDSCAPE]: 'Landscape (16:9)',
+  [AspectRatio.PORTRAIT]: 'Portrait (9:16)',
+};
 
 const modeIcons: Record<GenerationMode, React.ReactNode> = {
   [GenerationMode.TEXT_TO_VIDEO]: <TextModeIcon className="w-5 h-5" />,
   [GenerationMode.FRAMES_TO_VIDEO]: <FramesModeIcon className="w-5 h-5" />,
-  [GenerationMode.REFERENCES_TO_VIDEO]: <ReferencesModeIcon className="w-5 h-5" />,
+  [GenerationMode.REFERENCES_TO_VIDEO]: (
+    <ReferencesModeIcon className="w-5 h-5" />
+  ),
   [GenerationMode.EXTEND_VIDEO]: <FilmIcon className="w-5 h-5" />,
 };
 
-const fileToBase64 = (file: File): Promise<ImageFile> => {
+const fileToBase64 = <T extends {file: File; base64: string}>(
+  file: File,
+): Promise<T> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = (reader.result as string).split(',')[1];
-      resolve({file, base64});
+      if (base64) {
+        resolve({file, base64} as T);
+      } else {
+        reject(new Error('Failed to read file as base64.'));
+      }
     };
-    reader.onerror = reject;
+    reader.onerror = (error) => reject(error);
     reader.readAsDataURL(file);
   });
 };
+const fileToImageFile = (file: File): Promise<ImageFile> =>
+  fileToBase64<ImageFile>(file);
+const fileToVideoFile = (file: File): Promise<VideoFile> =>
+  fileToBase64<VideoFile>(file);
 
 const CustomSelect: React.FC<{
   label: string;
   value: string;
-  onChange: (val: any) => void;
+  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   icon: React.ReactNode;
-  options: {value: string, label: string}[];
+  children: React.ReactNode;
   disabled?: boolean;
-}> = ({label, value, onChange, icon, options, disabled}) => (
-  <div className="flex-1 min-w-[140px]">
-    <label className="text-[10px] uppercase font-bold text-gray-500 mb-1.5 block px-1">{label}</label>
-    <div className="relative group">
-      <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-500 group-hover:text-indigo-400 transition-colors">
+}> = ({label, value, onChange, icon, children, disabled = false}) => (
+  <div>
+    <label
+      className={`text-xs block mb-1.5 font-medium ${
+        disabled ? 'text-gray-500' : 'text-gray-400'
+      }`}>
+      {label}
+    </label>
+    <div className="relative">
+      <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
         {icon}
       </div>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
         disabled={disabled}
-        className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl pl-10 pr-8 py-3 text-sm appearance-none focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all disabled:opacity-50"
-      >
-        {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        className="w-full bg-[#1f1f1f] border border-gray-600 rounded-lg pl-10 pr-8 py-2.5 appearance-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-700/50 disabled:border-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed">
+        {children}
       </select>
-      <ChevronDownIcon className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
+      <ChevronDownIcon
+        className={`w-5 h-5 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${
+          disabled ? 'text-gray-600' : 'text-gray-400'
+        }`}
+      />
     </div>
   </div>
 );
 
-const CameraCapture: React.FC<{ onCapture: (img: ImageFile) => void; onClose: () => void }> = ({onCapture, onClose}) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-
-  useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
-      .then(setStream)
-      .catch(() => alert('Kamera-tilgang nektet.'));
-    return () => stream?.getTracks().forEach(t => t.stop());
-  }, []);
-
-  useEffect(() => { if (videoRef.current && stream) videoRef.current.srcObject = stream; }, [stream]);
-
-  const capture = () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx?.translate(canvas.width, 0); ctx?.scale(-1, 1);
-    ctx?.drawImage(videoRef.current, 0, 0);
-    canvas.toBlob(async (b) => {
-      if (b) {
-        const file = new File([b], "selfie.jpg", {type: "image/jpeg"});
-        onCapture(await fileToBase64(file));
+const ImageUpload: React.FC<{
+  onSelect: (image: ImageFile) => void;
+  onRemove?: () => void;
+  image?: ImageFile | null;
+  label: React.ReactNode;
+  className?: string;
+}> = ({onSelect, onRemove, image, label, className = "w-28 h-20"}) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        const imageFile = await fileToImageFile(file);
+        onSelect(imageFile);
+      } catch (error) {
+        console.error('Error converting file:', error);
       }
-    }, 'image/jpeg');
+    }
+    if (inputRef.current) {
+      inputRef.current.value = '';
+    }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
-      <div className="relative w-full max-w-lg aspect-video rounded-3xl overflow-hidden border-4 border-white/10 shadow-2xl">
-        <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
-        <button onClick={onClose} className="absolute top-4 right-4 bg-black/60 p-2 rounded-full"><XMarkIcon className="w-6 h-6" /></button>
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-          <div className="w-1/2 h-2/3 border-2 border-white/20 rounded-[50%] border-dashed"></div>
-        </div>
+  if (image) {
+    return (
+      <div className={`relative group ${className}`}>
+        <img
+          src={URL.createObjectURL(image.file)}
+          alt="preview"
+          className="w-full h-full object-cover rounded-lg shadow-inner"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute top-1 right-1 w-6 h-6 bg-black/60 hover:bg-black/80 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity"
+          aria-label="Remove image">
+          <XMarkIcon className="w-4 h-4" />
+        </button>
       </div>
-      <button onClick={capture} className="mt-10 w-20 h-20 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center text-white shadow-2xl active:scale-90 transition-all border-4 border-white/10">
-        <CameraIcon className="w-10 h-10" />
-      </button>
-      <canvas ref={canvasRef} className="hidden" />
-    </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => inputRef.current?.click()}
+      className={`${className} bg-gray-700/50 hover:bg-gray-700 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors`}>
+      <PlusIcon className="w-6 h-6" />
+      <span className="text-xs mt-1 text-center px-1">{label}</span>
+      <input
+        type="file"
+        ref={inputRef}
+        onChange={handleFileChange}
+        accept="image/*"
+        className="hidden"
+      />
+    </button>
+  );
+};
+
+const VideoUpload: React.FC<{
+  onSelect: (video: VideoFile) => void;
+  onRemove?: () => void;
+  video?: VideoFile | null;
+  label: React.ReactNode;
+}> = ({onSelect, onRemove, video, label}) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        const videoFile = await fileToVideoFile(file);
+        onSelect(videoFile);
+      } catch (error) {
+        console.error('Error converting file:', error);
+      }
+    }
+  };
+
+  if (video) {
+    return (
+      <div className="relative w-48 h-28 group">
+        <video
+          src={URL.createObjectURL(video.file)}
+          muted
+          loop
+          className="w-full h-full object-cover rounded-lg shadow-inner"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute top-1 right-1 w-6 h-6 bg-black/60 hover:bg-black/80 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity"
+          aria-label="Remove video">
+          <XMarkIcon className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => inputRef.current?.click()}
+      className="w-48 h-28 bg-gray-700/50 hover:bg-gray-700 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors text-center">
+      <PlusIcon className="w-6 h-6" />
+      <span className="text-xs mt-1 px-2">{label}</span>
+      <input
+        type="file"
+        ref={inputRef}
+        onChange={handleFileChange}
+        accept="video/*"
+        className="hidden"
+      />
+    </button>
   );
 };
 
 interface PromptFormProps {
   onGenerate: (params: GenerateVideoParams) => void;
   initialValues?: GenerateVideoParams | null;
-  selectedModel: VeoModel;
 }
 
-const PromptForm: React.FC<PromptFormProps> = ({ onGenerate, initialValues, selectedModel }) => {
+const PromptForm: React.FC<PromptFormProps> = ({
+  onGenerate,
+  initialValues,
+}) => {
   const [prompt, setPrompt] = useState(initialValues?.prompt ?? '');
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(initialValues?.aspectRatio ?? AspectRatio.LANDSCAPE);
-  const [resolution, setResolution] = useState<Resolution>(initialValues?.resolution ?? Resolution.P720);
-  const [mode, setMode] = useState<GenerationMode>(initialValues?.mode ?? GenerationMode.TEXT_TO_VIDEO);
-  const [startFrame, setStartFrame] = useState<ImageFile | null>(initialValues?.startFrame ?? null);
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [isModeOpen, setIsModeOpen] = useState(false);
+  const [model, setModel] = useState<VeoModel>(
+    initialValues?.model ?? VeoModel.VEO_QWEN_HYBRID,
+  );
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(
+    initialValues?.aspectRatio ?? AspectRatio.LANDSCAPE,
+  );
+  const [resolution, setResolution] = useState<Resolution>(
+    initialValues?.resolution ?? Resolution.P720,
+  );
+  const [generationMode, setGenerationMode] = useState<GenerationMode>(
+    initialValues?.mode ?? GenerationMode.TEXT_TO_VIDEO,
+  );
+  const [startFrame, setStartFrame] = useState<ImageFile | null>(
+    initialValues?.startFrame ?? null,
+  );
+  const [endFrame, setEndFrame] = useState<ImageFile | null>(
+    initialValues?.endFrame ?? null,
+  );
+  const [referenceImages, setReferenceImages] = useState<ImageFile[]>(
+    initialValues?.referenceImages ?? [],
+  );
+  const [styleImage, setStyleImage] = useState<ImageFile | null>(
+    initialValues?.styleImage ?? null,
+  );
+  const [inputVideo, setInputVideo] = useState<VideoFile | null>(
+    initialValues?.inputVideo ?? null,
+  );
+  const [inputVideoObject, setInputVideoObject] = useState<Video | null>(
+    initialValues?.inputVideoObject ?? null,
+  );
+  const [isLooping, setIsLooping] = useState(initialValues?.isLooping ?? false);
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modeSelectorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (initialValues) {
       setPrompt(initialValues.prompt ?? '');
-      setMode(initialValues.mode ?? GenerationMode.TEXT_TO_VIDEO);
+      setModel(initialValues.model ?? VeoModel.VEO_QWEN_HYBRID);
+      setAspectRatio(initialValues.aspectRatio ?? AspectRatio.LANDSCAPE);
+      setResolution(initialValues.resolution ?? Resolution.P720);
+      setGenerationMode(initialValues.mode ?? GenerationMode.TEXT_TO_VIDEO);
       setStartFrame(initialValues.startFrame ?? null);
+      setEndFrame(initialValues.endFrame ?? null);
+      setReferenceImages(initialValues.referenceImages ?? []);
+      setStyleImage(initialValues.styleImage ?? null);
+      setInputVideo(initialValues.inputVideo ?? null);
+      setInputVideoObject(initialValues.inputVideoObject ?? null);
+      setIsLooping(initialValues.isLooping ?? false);
     }
   }, [initialValues]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onGenerate({
+  // Enforce specific model constraints as per guidelines
+  useEffect(() => {
+    if (generationMode === GenerationMode.EXTEND_VIDEO) {
+      setResolution(Resolution.P720);
+    } else if (generationMode === GenerationMode.REFERENCES_TO_VIDEO) {
+      setModel(VeoModel.VEO);
+      setAspectRatio(AspectRatio.LANDSCAPE);
+      setResolution(Resolution.P720);
+    }
+  }, [generationMode]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [prompt]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        modeSelectorRef.current &&
+        !modeSelectorRef.current.contains(event.target as Node)
+      ) {
+        setIsModeSelectorOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      onGenerate({
+        prompt,
+        model,
+        aspectRatio,
+        resolution,
+        mode: generationMode,
+        startFrame,
+        endFrame,
+        referenceImages,
+        styleImage,
+        inputVideo,
+        inputVideoObject,
+        isLooping,
+      });
+    },
+    [
       prompt,
-      model: selectedModel,
+      model,
       aspectRatio,
       resolution,
-      mode,
+      generationMode,
       startFrame,
-      inputVideoObject: initialValues?.inputVideoObject
-    });
+      endFrame,
+      referenceImages,
+      styleImage,
+      inputVideo,
+      inputVideoObject,
+      onGenerate,
+      isLooping,
+    ],
+  );
+
+  const handleSelectMode = (mode: GenerationMode) => {
+    setGenerationMode(mode);
+    setIsModeSelectorOpen(false);
+    setStartFrame(null);
+    setEndFrame(null);
+    setReferenceImages([]);
+    setStyleImage(null);
+    setInputVideo(null);
+    setInputVideoObject(null);
+    setIsLooping(false);
   };
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      setStartFrame(await fileToBase64(f));
-      setMode(GenerationMode.FRAMES_TO_VIDEO);
+  const promptPlaceholder = {
+    [GenerationMode.TEXT_TO_VIDEO]: 'Describe the video you want to create...',
+    [GenerationMode.FRAMES_TO_VIDEO]:
+      'Describe motion between start and end frames (optional)...',
+    [GenerationMode.REFERENCES_TO_VIDEO]:
+      'Describe a video using reference images...',
+    [GenerationMode.EXTEND_VIDEO]: 'Describe what happens next (required)...',
+  }[generationMode];
+
+  const selectableModes = [
+    GenerationMode.TEXT_TO_VIDEO,
+    GenerationMode.FRAMES_TO_VIDEO,
+    GenerationMode.REFERENCES_TO_VIDEO,
+  ];
+
+  const totalReferences = referenceImages.length + (styleImage ? 1 : 0);
+
+  const renderMediaUploads = () => {
+    if (generationMode === GenerationMode.FRAMES_TO_VIDEO) {
+      return (
+        <div className="mb-3 p-4 bg-[#2c2c2e] rounded-xl border border-gray-700 flex flex-col items-center justify-center gap-4">
+          <div className="flex items-center justify-center gap-4">
+            <ImageUpload
+              label="Start Frame"
+              image={startFrame}
+              onSelect={setStartFrame}
+              onRemove={() => {
+                setStartFrame(null);
+                setIsLooping(false);
+              }}
+            />
+            {!isLooping && (
+              <ImageUpload
+                label="End Frame"
+                image={endFrame}
+                onSelect={setEndFrame}
+                onRemove={() => setEndFrame(null)}
+              />
+            )}
+          </div>
+          <p className="text-[10px] text-gray-500 italic">
+            Images-to-video requires at least a start frame.
+          </p>
+          {startFrame && !endFrame && (
+            <div className="mt-1 flex items-center">
+              <input
+                id="loop-video-checkbox"
+                type="checkbox"
+                checked={isLooping}
+                onChange={(e) => setIsLooping(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 bg-gray-700 border-gray-600 rounded focus:ring-indigo-500 focus:ring-offset-gray-800 cursor-pointer"
+              />
+              <label
+                htmlFor="loop-video-checkbox"
+                className="ml-2 text-sm font-medium text-gray-300 cursor-pointer">
+                Create a looping video
+              </label>
+            </div>
+          )}
+        </div>
+      );
     }
+    if (generationMode === GenerationMode.REFERENCES_TO_VIDEO) {
+      return (
+        <div className="mb-3 p-4 bg-[#2c2c2e] rounded-xl border border-gray-700 flex flex-col items-center gap-5">
+          <div className="w-full">
+            <label className="text-xs font-semibold text-gray-400 uppercase tracking-widest block mb-3 text-center">
+              Content References ({referenceImages.length}/3)
+            </label>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {referenceImages.map((img, index) => (
+                <ImageUpload
+                  key={index}
+                  image={img}
+                  label=""
+                  onSelect={() => {}}
+                  onRemove={() =>
+                    setReferenceImages((imgs) => imgs.filter((_, i) => i !== index))
+                  }
+                />
+              ))}
+              {totalReferences < 3 && (
+                <ImageUpload
+                  label="Add Asset"
+                  onSelect={(img) => setReferenceImages((imgs) => [...imgs, img])}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    if (generationMode === GenerationMode.EXTEND_VIDEO) {
+      return (
+        <div className="mb-3 p-4 bg-[#2c2c2e] rounded-xl border border-gray-700 flex items-center justify-center gap-4">
+          <VideoUpload
+            label={
+              <>
+                Input Video
+                <br />
+                (Previous generation)
+              </>
+            }
+            video={inputVideo}
+            onSelect={setInputVideo}
+            onRemove={() => {
+              setInputVideo(null);
+              setInputVideoObject(null);
+            }}
+          />
+        </div>
+      );
+    }
+    return null;
   };
+
+  const isExtendMode = generationMode === GenerationMode.EXTEND_VIDEO;
+  const isReferenceMode = generationMode === GenerationMode.REFERENCES_TO_VIDEO;
+
+  let isSubmitDisabled = false;
+  let tooltipText = '';
+
+  switch (generationMode) {
+    case GenerationMode.TEXT_TO_VIDEO:
+      isSubmitDisabled = !prompt.trim();
+      if (isSubmitDisabled) tooltipText = 'Please enter a prompt.';
+      break;
+    case GenerationMode.FRAMES_TO_VIDEO:
+      isSubmitDisabled = !startFrame;
+      if (isSubmitDisabled) tooltipText = 'A start frame is required.';
+      break;
+    case GenerationMode.REFERENCES_TO_VIDEO:
+      const hasNoPrompt = !prompt.trim();
+      const hasNoAssets = referenceImages.length === 0;
+      isSubmitDisabled = hasNoPrompt || hasNoAssets;
+      if (hasNoPrompt && hasNoAssets) {
+        tooltipText = 'Please enter a prompt and add at least one asset.';
+      } else if (hasNoPrompt) {
+        tooltipText = 'Please enter a prompt.';
+      } else if (hasNoAssets) {
+        tooltipText = 'At least one reference asset is required.';
+      }
+      break;
+    case GenerationMode.EXTEND_VIDEO:
+      isSubmitDisabled = !inputVideoObject || !prompt.trim();
+      if (!inputVideoObject) {
+        tooltipText = 'An input video from a previous generation is required to extend.';
+      } else if (!prompt.trim()) {
+        tooltipText = 'Please enter a prompt describing the extension.';
+      }
+      break;
+  }
 
   return (
-    <div className="w-full max-w-3xl mx-auto relative">
-      {isCameraOpen && <CameraCapture onClose={() => setIsCameraOpen(false)} onCapture={(img) => { setStartFrame(img); setMode(GenerationMode.FRAMES_TO_VIDEO); setIsCameraOpen(false); }} />}
-      
-      <form onSubmit={handleSubmit} className="bg-[#0f0f0f] border border-white/5 p-8 rounded-[2.5rem] shadow-[0_30px_60px_rgba(0,0,0,0.8)]">
-        
-        <div className="flex gap-3 mb-6 overflow-x-auto pb-2 custom-scrollbar">
-           <button type="button" onClick={() => setIsModeOpen(!isModeOpen)} className="flex items-center gap-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 px-5 py-3 rounded-2xl border border-indigo-500/20 transition-all text-xs font-bold whitespace-nowrap">
-             {modeIcons[mode]}
-             {mode}
-             <ChevronDownIcon className="w-3 h-3" />
-           </button>
-           <button type="button" onClick={() => setIsCameraOpen(true)} className="flex items-center gap-2 bg-pink-600/10 hover:bg-pink-600/20 text-pink-400 px-5 py-3 rounded-2xl border border-pink-500/20 transition-all text-xs font-bold whitespace-nowrap animate-pulse">
-             <CameraIcon className="w-4 h-4" />
-             TA SELFIE & SNAKK
-           </button>
-           <label className="flex items-center gap-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 px-5 py-3 rounded-2xl border border-emerald-500/20 transition-all text-xs font-bold cursor-pointer whitespace-nowrap">
-             <PlusIcon className="w-4 h-4" />
-             FRA GALLERI
-             <input type="file" accept="image/*" className="hidden" onChange={handleFile} />
-           </label>
-        </div>
-
-        {startFrame && (
-          <div className="mb-6 flex flex-col gap-2 animate-in fade-in slide-in-from-top-4 duration-500">
-             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pl-1">Startpunkt:</span>
-             <div className="relative w-40 h-28 group rounded-2xl overflow-hidden border border-white/10 shadow-xl">
-               <img src={URL.createObjectURL(startFrame.file)} className="w-full h-full object-cover" />
-               <button onClick={() => setStartFrame(null)} className="absolute top-2 right-2 bg-black/60 p-1.5 rounded-full hover:bg-red-500/80 transition-colors">
-                 <XMarkIcon className="w-3 h-3 text-white" />
-               </button>
-             </div>
+    <div className="relative w-full">
+      {isSettingsOpen && (
+        <div className="absolute bottom-full left-0 right-0 mb-3 p-4 bg-[#2c2c2e] rounded-xl border border-gray-700 shadow-2xl z-20">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="flex flex-col">
+              <CustomSelect
+                label="Engine"
+                value={model}
+                onChange={(e) => setModel(e.target.value as VeoModel)}
+                icon={<SparklesIcon className="w-5 h-5 text-gray-400" />}
+                disabled={isReferenceMode}>
+                {Object.values(VeoModel).map((modelValue) => (
+                  <option key={modelValue} value={modelValue}>
+                    {modelValue === VeoModel.VEO_QWEN_HYBRID ? 'Qwen-Style Hybrid (Best)' : 
+                     modelValue === VeoModel.VEO ? 'High Quality (Veo 3.1)' : 'Fast (Veo 3.1)'}
+                  </option>
+                ))}
+              </CustomSelect>
+            </div>
+            <div className="flex flex-col">
+              <CustomSelect
+                label="Aspect Ratio"
+                value={aspectRatio}
+                onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
+                icon={<RectangleStackIcon className="w-5 h-5 text-gray-400" />}
+                disabled={isReferenceMode}>
+                {Object.entries(aspectRatioDisplayNames).map(([key, name]) => (
+                  <option key={key} value={key}>
+                    {name}
+                  </option>
+                ))}
+              </CustomSelect>
+            </div>
+            <div className="flex flex-col">
+              <CustomSelect
+                label="Resolution"
+                value={resolution}
+                onChange={(e) => setResolution(e.target.value as Resolution)}
+                icon={<TvIcon className="w-5 h-5 text-gray-400" />}
+                disabled={isExtendMode || isReferenceMode}>
+                <option value={Resolution.P720}>720p</option>
+                <option value={Resolution.P1080}>1080p</option>
+              </CustomSelect>
+            </div>
           </div>
-        )}
-
-        <div className="relative group mb-8">
+        </div>
+      )}
+      <form onSubmit={handleSubmit} className="w-full">
+        {renderMediaUploads()}
+        <div className="flex items-end gap-2 bg-[#1f1f1f] border border-gray-600 rounded-2xl p-2 shadow-lg focus-within:ring-2 focus-within:ring-indigo-500">
+          <div className="relative" ref={modeSelectorRef}>
+            <button
+              type="button"
+              onClick={() => setIsModeSelectorOpen((prev) => !prev)}
+              className="flex shrink-0 items-center gap-2 px-3 py-2.5 rounded-lg hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
+              aria-label="Select generation mode">
+              {modeIcons[generationMode]}
+              <span className="font-medium text-sm whitespace-nowrap">
+                {generationMode}
+              </span>
+            </button>
+            {isModeSelectorOpen && (
+              <div className="absolute bottom-full mb-2 w-60 bg-[#2c2c2e] border border-gray-600 rounded-lg shadow-xl overflow-hidden z-30">
+                {selectableModes.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => handleSelectMode(mode)}
+                    className={`w-full text-left flex items-center gap-3 p-3 hover:bg-indigo-600/50 ${generationMode === mode ? 'bg-indigo-600/30 text-white' : 'text-gray-300'}`}>
+                    {modeIcons[mode]}
+                    <span>{mode}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <textarea
+            ref={textareaRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={startFrame ? "Hva skal skje med bildet? (f.eks: 'Endre fargen på huset til blått og legg til en stor terrasse')" : "Beskriv din cinematiske visjon..."}
-            className="w-full bg-black/60 border border-white/5 rounded-3xl p-6 pr-16 text-xl text-white placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all min-h-[140px] leading-relaxed shadow-inner"
+            placeholder={promptPlaceholder}
+            className="flex-grow bg-transparent focus:outline-none resize-none text-base text-gray-200 placeholder-gray-500 max-h-48 py-2"
+            rows={1}
           />
           <button
-            type="submit"
-            disabled={!prompt && !startFrame}
-            className="absolute bottom-6 right-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 text-white p-4 rounded-2xl shadow-2xl transition-all hover:scale-110 active:scale-95 disabled:opacity-30"
-          >
-            <SparklesIcon className="w-7 h-7" />
+            type="button"
+            onClick={() => setIsSettingsOpen((prev) => !prev)}
+            className={`p-2.5 rounded-full hover:bg-gray-700 ${isSettingsOpen ? 'bg-gray-700 text-white' : 'text-gray-300'}`}
+            aria-label="Toggle settings">
+            <SlidersHorizontalIcon className="w-5 h-5" />
           </button>
-        </div>
-
-        <div className="flex flex-wrap gap-6">
-          <CustomSelect 
-            label="Bildeformat" 
-            value={aspectRatio} 
-            onChange={setAspectRatio} 
-            icon={<TvIcon className="w-4 h-4" />}
-            options={[{value: AspectRatio.LANDSCAPE, label: 'Kino (16:9)'}, {value: AspectRatio.PORTRAIT, label: 'Mobil (9:16)'}]}
-          />
-          <CustomSelect 
-            label="Kvalitet" 
-            value={resolution} 
-            onChange={setResolution} 
-            icon={<SparklesIcon className="w-4 h-4" />}
-            disabled={mode === GenerationMode.EXTEND_VIDEO}
-            options={[{value: Resolution.P720, label: 'Standard (720p)'}, {value: Resolution.P1080, label: 'Ultra (1080p)'}]}
-          />
-        </div>
-
-        {isModeOpen && (
-          <div className="absolute top-24 left-8 bg-[#151515] border border-white/10 rounded-2xl shadow-2xl z-50 p-2 w-64 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200">
-            {Object.values(GenerationMode).map(m => (
-              <button key={m} onClick={() => { setMode(m); setIsModeOpen(false); }} className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-3 ${mode === m ? 'text-indigo-400 bg-white/5' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-                {modeIcons[m]} {m}
-              </button>
-            ))}
+          <div className="relative group">
+            <button
+              type="submit"
+              className="p-2.5 bg-indigo-600 rounded-full hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed"
+              aria-label="Generate video"
+              disabled={isSubmitDisabled}>
+              <ArrowRightIcon className="w-5 h-5 text-white" />
+            </button>
+            {isSubmitDisabled && tooltipText && (
+              <div
+                role="tooltip"
+                className="absolute bottom-full right-0 mb-2 w-max max-w-xs px-3 py-1.5 bg-gray-900 border border-gray-700 text-white text-sm rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                {tooltipText}
+              </div>
+            )}
           </div>
-        )}
+        </div>
+        <p className="text-[10px] text-gray-500 text-center mt-2 px-4 uppercase tracking-tighter">
+          {model === VeoModel.VEO_QWEN_HYBRID ? "Dual-Engine: Gemini 3 Pro reasoning + Veo 3.1 cinematic generation" : "Standard Veo 3.1 single-pass generation"}
+        </p>
       </form>
     </div>
   );

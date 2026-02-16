@@ -21,8 +21,6 @@ import {
   Sparkles,
   Tv,
   X,
-  Camera,
-  User,
 } from 'lucide-react';
 
 const defaultProps = {
@@ -96,11 +94,3 @@ export const FileImageIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =>
 export const CurvedArrowDownIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
   props,
 ) => <ArrowDown {...props} strokeWidth={3} />;
-
-export const CameraIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <Camera {...defaultProps} {...props} />
-);
-
-export const UserIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <User {...defaultProps} {...props} />
-);
