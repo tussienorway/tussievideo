@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -526,7 +525,7 @@ const PromptForm: React.FC<PromptFormProps> = ({
                 icon={<SparklesIcon className="w-5 h-5 text-gray-400" />}
                 disabled={isReferenceMode}>
                 {Object.values(VeoModel).map((modelValue) => (
-                  <option key={modelValue} value={modelValue}>
+                  <option key={modelValue as string} value={modelValue}>
                     {modelValue === VeoModel.VEO_QWEN_HYBRID ? 'Qwen-Style Hybrid (Best)' : 
                      modelValue === VeoModel.VEO ? 'High Quality (Veo 3.1)' : 'Fast (Veo 3.1)'}
                   </option>

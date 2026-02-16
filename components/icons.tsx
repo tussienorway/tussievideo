@@ -21,6 +21,7 @@ import {
   Sparkles,
   Tv,
   X,
+  Search,
 } from 'lucide-react';
 
 const defaultProps = {
@@ -29,6 +30,10 @@ const defaultProps = {
 
 export const KeyIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <KeyRound {...defaultProps} {...props} />
+);
+
+export const SearchIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Search {...defaultProps} {...props} />
 );
 
 export const ArrowPathIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
